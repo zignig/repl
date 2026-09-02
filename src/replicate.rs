@@ -2,11 +2,12 @@
 //
 
 use std::collections::BTreeMap;
+use std::env::consts::DLL_PREFIX;
 use std::{str::FromStr, time::Duration};
 
 use bytes::Bytes;
 use iroh::{Endpoint, PublicKey, SecretKey};
-use iroh_blobs::{BlobsProtocol, Hash, HashAndFormat, api::downloader::Shuffled};
+use iroh_blobs::{BlobsProtocol, Hash, HashAndFormat};
 use iroh_gossip::{net::Gossip, proto::TopicId};
 
 use iroh_smol_kv::util::format_bytes;
@@ -63,7 +64,7 @@ pub async fn test_runner(
     secret: SecretKey,
     blobs: BlobsProtocol,
     endpoint: Endpoint,
-    prefixes: Vec<String>,
+    prefix: Vec<String>,
 ) -> Result<()> {
     let mut subscribers = BTreeMap::new();
     let ws = client.write(secret);
@@ -80,6 +81,7 @@ pub async fn test_runner(
         sub,
         blobs.clone(),
         endpoint.clone(),
+        prefix.clone()
     ));
     subscribers.insert(id, AbortOnDropHandle::new(task));
     println!("update count {:?}", id);
@@ -87,16 +89,19 @@ pub async fn test_runner(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                for pre in prefixes.clone().into_iter() {
-                    println!("scan prefix {pre}");
-                    let mut tag_scan = blobs.store().tags().list_prefix(pre).await.unwrap();
+                for pre in prefix.clone().into_iter() {
+                    // info!("scan prefix {}",&pre);
+                    let mut counter  = 0;
+                    let mut tag_scan = blobs.store().tags().list_prefix(&pre).await.unwrap();
                     // let mut tag_scan = blobs.store().tags().list().await.unwrap();
                     while let Some(event) = tag_scan.next().await {
                         let tag = event.unwrap();
                         let tag_name = str::from_utf8(&tag.name.0).unwrap().to_owned();
-                        println!("{:#?} {:#?}",tag_name,&tag.hash);
+                        counter +=1 ;
+                        // info!("{:#?}",tag_name);
                         let _ = ws.put(tag_name, tag.hash.to_hex()).await;
                     }
+                    info!("prefix {} - {} items",&pre,counter);
                 }
             }
 
@@ -122,10 +127,18 @@ async fn get_item(
     match blobs.store().remote().local(knf).await {
         Ok(info) => {
             if !info.is_complete() {
-                info!("fetch blob {:#?}", &s);
+                info!("fetch blob {:?} {:#?}",&name, &s);
                 if target != endpoint.id() {
-                    let conn = endpoint.connect(target, iroh_blobs::ALPN).await.expect("connect fail");
-                    let r = blobs.store().remote().fetch(conn, knf).await.expect("blob fail");
+                    let conn = endpoint
+                        .connect(target, iroh_blobs::ALPN)
+                        .await
+                        .expect("connect fail");
+                    let r = blobs
+                        .store()
+                        .remote()
+                        .fetch(conn, knf)
+                        .await
+                        .expect("blob fail");
                     warn!("{:?}", r);
                 }
                 // let addrs = Shuffled::new(vec![target]);
@@ -144,6 +157,7 @@ async fn handle_subscription(
     sub: SubscribeResponse,
     blobs: BlobsProtocol,
     endpoint: Endpoint,
+    prefix : Vec<String>
 ) {
     let stream = sub.stream_raw();
     tokio::pin!(stream);
@@ -157,6 +171,7 @@ async fn handle_subscription(
                     format_bytes(&key),
                     format_bytes(&value.value)
                 );
+                
                 let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
             }
             Ok(SubscribeItem::Expired((scope, key, timestamp))) => {
