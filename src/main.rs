@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         topic_id,
         config.get_peers(),
         config.get_secret(),
-        vec!["col".to_string(), "notes".to_string()],
+        config.get_prefix(),
     )
     .await;
     match repl_res {
@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
 pub struct Config {
     secret: SecretKey,
     peers: Vec<PublicKey>,
+    prefix: Vec<String>,
 }
 
 impl Config {
@@ -89,6 +90,10 @@ impl Config {
 
     pub fn get_peers(&self) -> Vec<PublicKey> {
         self.peers.clone()
+    }
+
+    pub fn get_prefix(&self) -> Vec<String> {
+        self.prefix.clone()
     }
 
     pub fn save(&self, path: &PathBuf) -> Result<()> {
@@ -111,6 +116,7 @@ impl Config {
                 let slf = Self {
                     secret,
                     peers: vec![],
+                    prefix: vec![],
                 };
                 slf.save(&path)?;
                 slf

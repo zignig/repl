@@ -14,7 +14,7 @@ use iroh_smol_kv::{Client, Config, SubscribeItem, SubscribeResponse};
 use n0_future::{StreamExt, task::AbortOnDropHandle};
 use n0_snafu::{Result, ResultExt};
 use tokio::task;
-use tracing::info;
+use tracing::{error, info, warn};
 
 pub struct Replicator {
     blobs: BlobsProtocol,
@@ -115,13 +115,21 @@ async fn get_item(
     // info!("get item len {:#?}", hash.len());
     let s = str::from_utf8(&hash).expect("bad hash");
     let hash = Hash::from_str(s).expect("bad conversion");
-    let r = blobs.blobs().has(hash).await.expect("blob fail list");
-    if !r {
-        info!("fetch blob {:#?}", &s);
-        let req = HashAndFormat::hash_seq(hash);
-        let addrs = Shuffled::new(vec![target]);
-        let _ = blobs.downloader(endpoint).download(req, addrs).await;
-        blobs.tags().set(name, hash).await.expect("bad tag");
+    let knf = HashAndFormat::hash_seq(hash);
+    if let Ok(status)  = blobs.blobs().status(hash).await{
+        info!("status {:#?}",status);
+    }
+    match blobs.store().remote().local(knf).await {
+        Ok(info) => {
+            if info.is_complete() {
+                info!("fetch blob {:#?}", &s);
+                let req = HashAndFormat::hash_seq(hash);
+                let addrs = Shuffled::new(vec![target]);
+                let _ = blobs.downloader(endpoint).download(req, addrs).await;
+                blobs.tags().set(name, hash).await.expect("bad tag");
+            }
+        }
+        Err(e) => error!("blob fail , {:#?}", e),
     }
     Ok(())
 }
