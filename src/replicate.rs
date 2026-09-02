@@ -116,17 +116,22 @@ async fn get_item(
     let s = str::from_utf8(&hash).expect("bad hash");
     let hash = Hash::from_str(s).expect("bad conversion");
     let knf = HashAndFormat::hash_seq(hash);
-    if let Ok(status)  = blobs.blobs().status(hash).await{
-        info!("status {:?} {:?}",status,hash);
-    }
+    // if let Ok(status)  = blobs.blobs().status(hash).await{
+    //     info!("status {:?} {:?}",status,hash);
+    // }
     match blobs.store().remote().local(knf).await {
         Ok(info) => {
             if !info.is_complete() {
                 info!("fetch blob {:#?}", &s);
-                let req = HashAndFormat::hash_seq(hash);
-                let addrs = Shuffled::new(vec![target]);
-                let _ = blobs.downloader(endpoint).download(req, addrs).await;
+                if target != endpoint.id() {
+                    let conn = endpoint.connect(target, iroh_blobs::ALPN).await.expect("connect fail");
+                    let r = blobs.store().remote().fetch(conn, knf).await.expect("blob fail");
+                    warn!("{:?}", r);
+                }
+                // let addrs = Shuffled::new(vec![target]);
+                // let _ = blobs.downloader(endpoint).download(req, addrs).await;
                 blobs.tags().set(name, hash).await.expect("bad tag");
+                info!("finish blob {:#?}", &s);
             }
         }
         Err(e) => error!("blob fail , {:#?}", e),
