@@ -101,7 +101,7 @@ impl Config {
         let config = match std::fs::read_to_string(&path) {
             Ok(content) => {
                 let content = content.as_str();
-                let config: Config = toml::from_str(&content).expect("Bad config file");
+                let config: Config = toml::from_str(content).expect("Bad config file");
                 config
             }
             Err(e) => {

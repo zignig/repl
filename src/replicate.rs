@@ -14,7 +14,7 @@ use iroh_smol_kv::{Client, Config, SubscribeItem, SubscribeResponse};
 use n0_future::{StreamExt, task::AbortOnDropHandle};
 use n0_snafu::{Result, ResultExt};
 use tokio::task;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct Replicator {
     blobs: BlobsProtocol,
@@ -75,7 +75,12 @@ pub async fn test_runner(
     };
     let sub = client.subscribe();
     let id = next_op_id();
-    let task = tokio::spawn(handle_subscription(id, sub,blobs.clone(),endpoint.clone()));
+    let task = tokio::spawn(handle_subscription(
+        id,
+        sub,
+        blobs.clone(),
+        endpoint.clone(),
+    ));
     subscribers.insert(id, AbortOnDropHandle::new(task));
     println!("update count {:?}", id);
     let mut ticker = tokio::time::interval(Duration::from_secs(600));
@@ -112,20 +117,21 @@ async fn get_item(
     let hash = Hash::from_str(s).expect("bad conversion");
     let r = blobs.blobs().has(hash).await.expect("blob fail list");
     if !r {
-        info!("fetch blob {:#?}",&s);
+        info!("fetch blob {:#?}", &s);
         let req = HashAndFormat::hash_seq(hash);
         let addrs = Shuffled::new(vec![target]);
-        blobs
-            .downloader(endpoint)
-            .download(req, addrs)
-            .await
-            .expect("blob fail");
+        let _ = blobs.downloader(endpoint).download(req, addrs).await;
         blobs.tags().set(name, hash).await.expect("bad tag");
     }
     Ok(())
 }
 
-async fn handle_subscription(id: usize, sub: SubscribeResponse,blobs: BlobsProtocol,endpoint: Endpoint) {
+async fn handle_subscription(
+    id: usize,
+    sub: SubscribeResponse,
+    blobs: BlobsProtocol,
+    endpoint: Endpoint,
+) {
     let stream = sub.stream_raw();
     tokio::pin!(stream);
     while let Some(item) = stream.next().await {
@@ -138,7 +144,7 @@ async fn handle_subscription(id: usize, sub: SubscribeResponse,blobs: BlobsProto
                     format_bytes(&key),
                     format_bytes(&value.value)
                 );
-                let _ = get_item(&blobs,&endpoint,scope,key,value.value).await;
+                let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
             }
             Ok(SubscribeItem::Expired((scope, key, timestamp))) => {
                 println!(
