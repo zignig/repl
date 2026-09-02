@@ -2,7 +2,6 @@
 //
 
 use std::collections::BTreeMap;
-use std::env::consts::DLL_PREFIX;
 use std::{str::FromStr, time::Duration};
 
 use bytes::Bytes;
@@ -157,7 +156,7 @@ async fn handle_subscription(
     sub: SubscribeResponse,
     blobs: BlobsProtocol,
     endpoint: Endpoint,
-    prefix : Vec<String>
+    _prefix : Vec<String>
 ) {
     let stream = sub.stream_raw();
     tokio::pin!(stream);
