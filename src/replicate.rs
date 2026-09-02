@@ -1,20 +1,22 @@
 // Make a replicator using the iroh-smol-kv
 //
 
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
-use iroh::{PublicKey, SecretKey};
-use iroh_blobs::BlobsProtocol;
+use bytes::Bytes;
+use iroh::{Endpoint, PublicKey, SecretKey};
+use iroh_blobs::{BlobsProtocol, Hash, HashAndFormat, api::downloader::Shuffled};
 use iroh_gossip::{net::Gossip, proto::TopicId};
 
 use iroh_smol_kv::{Client, Config};
 use n0_future::StreamExt;
 use n0_snafu::{Result, ResultExt};
 use tokio::task;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct Replicator {
     blobs: BlobsProtocol,
+    endpoint: Endpoint,
     client: Client,
     secret: SecretKey,
     prefixes: Vec<String>,
@@ -24,6 +26,7 @@ impl Replicator {
     pub async fn new(
         gossip: Gossip,
         blobs: BlobsProtocol,
+        endpoint: Endpoint,
         topic_id: TopicId,
         bootstrap: Vec<PublicKey>,
         secret: SecretKey,
@@ -33,6 +36,7 @@ impl Replicator {
         let client = Client::local(topic, Config::default());
         Ok(Self {
             blobs,
+            endpoint,
             client,
             secret,
             prefixes,
@@ -44,8 +48,9 @@ impl Replicator {
         let client = self.client.clone();
         let secret = self.secret.clone();
         let blobs = self.blobs.clone();
+        let endpoint = self.endpoint.clone();
         let prefixes = self.prefixes.clone();
-        task::spawn(test_runner(client, secret, blobs, prefixes));
+        task::spawn(test_runner(client, secret, blobs,endpoint, prefixes));
         Ok(())
     }
 }
@@ -55,6 +60,7 @@ pub async fn test_runner(
     client: Client,
     secret: SecretKey,
     blobs: BlobsProtocol,
+    endpoint: Endpoint,
     prefixes: Vec<String>,
 ) -> Result<()> {
     let ws = client.write(secret);
@@ -70,25 +76,51 @@ pub async fn test_runner(
     let mut ticker = tokio::time::interval(Duration::from_secs(30));
     loop {
         tokio::select! {
-                _ = ticker.tick() => {
-                    for pre in prefixes.clone().into_iter() {
-                        println!("scan prefix {pre}");
-                        let mut tag_scan = blobs.store().tags().list_prefix(pre).await.unwrap();
-                        // let mut tag_scan = blobs.store().tags().list().await.unwrap();
-                        while let Some(event) = tag_scan.next().await {
-                            let tag = event.unwrap();
-                            let tag_name = str::from_utf8(&tag.name.0).unwrap().to_owned();
-                            let _ = ws.put(tag_name, tag.hash.to_hex()).await;
-                        }
+            _ = ticker.tick() => {
+                for pre in prefixes.clone().into_iter() {
+                    println!("scan prefix {pre}");
+                    let mut tag_scan = blobs.store().tags().list_prefix(pre).await.unwrap();
+                    // let mut tag_scan = blobs.store().tags().list().await.unwrap();
+                    while let Some(event) = tag_scan.next().await {
+                        let tag = event.unwrap();
+                        let tag_name = str::from_utf8(&tag.name.0).unwrap().to_owned();
+                        let _ = ws.put(tag_name, tag.hash.to_hex()).await;
                     }
-                    let items = client.iter().collect::<Vec<_>>().await.expect("collect borked");
-                        for i in items {
-                            info!("{:#?}",i);
-                        };
                 }
+                let items = client.iter().collect::<Vec<_>>().await.expect("collect borked");
+                    for (target,name, content_hash) in items {
+                        info!("{} , {:#?} , {:#?}",target.fmt_short(),name,content_hash);
+                        get_item(&blobs,&endpoint,target,name,content_hash).await?;
+                };
+            }
 
 
-            };
+        };
         // tokio::time::sleep(Duration::from_secs(3600)).await;
     }
+}
+
+async fn get_item(
+    blobs: &BlobsProtocol,
+    endpoint: &Endpoint,
+    target: PublicKey,
+    name: Bytes,
+    hash: Bytes,
+) -> Result<()> {
+    // info!("get item len {:#?}", hash.len());
+    let s = str::from_utf8(&hash).expect("bad hash");
+    let hash = Hash::from_str(s).expect("bad conversion");
+    let r = blobs.blobs().has(hash).await.expect("blob fail list");
+    // info!("have blob {} -> {:#?}", &hash, &r);
+    if !r {
+        warn!("fetch some blobage");
+        let req = HashAndFormat::hash_seq(hash);
+        let addrs = Shuffled::new(vec![target]);
+        blobs
+            .downloader(endpoint)
+            .download(req, addrs)
+            .await.expect("blob fail");
+        blobs.tags().set(name, hash).await.expect("bad tag");
+    }
+    Ok(())
 }

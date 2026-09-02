@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let mut filter = Targets::new();
     filter = filter
         .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
-        .with_target("iroh-gossip", LevelFilter::DEBUG);
+        .with_target("iroh-blobs", LevelFilter::DEBUG);
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(filter)
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     // GOSSIP!
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-    let router = Router::builder(endpoint)
+    let router = Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs.clone())
         .accept(iroh_gossip::ALPN, gossip.clone())
         .spawn();
@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let repl_res = Replicator::new(
         gossip.clone(),
         blobs.clone(),
+        endpoint.clone(),
         topic_id,
         config.get_peers(),
         config.get_secret(),

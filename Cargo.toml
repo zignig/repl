@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 blake3 = { version = "1.8.7", features = ["serde"] }
+bytes = { version = "1.12.1", features = ["serde"] }
 clap = "4.6.6"
 clap_derive = "4.6.4"
 directories = "6.0.0"
