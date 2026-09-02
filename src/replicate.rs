@@ -117,11 +117,11 @@ async fn get_item(
     let hash = Hash::from_str(s).expect("bad conversion");
     let knf = HashAndFormat::hash_seq(hash);
     if let Ok(status)  = blobs.blobs().status(hash).await{
-        info!("status {:#?}",status);
+        info!("status {:?} {:?}",status,hash);
     }
     match blobs.store().remote().local(knf).await {
         Ok(info) => {
-            if info.is_complete() {
+            if !info.is_complete() {
                 info!("fetch blob {:#?}", &s);
                 let req = HashAndFormat::hash_seq(hash);
                 let addrs = Shuffled::new(vec![target]);
