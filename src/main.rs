@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use iroh::{Endpoint, PublicKey, SecretKey, endpoint::presets, protocol::Router};
-use iroh_blobs::{BlobsProtocol, store::mem::MemStore};
+use iroh_blobs::store::fs::FsStore;
+use iroh_gossip::{Gossip, TopicId};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use tracing_subscriber::{
@@ -10,12 +11,16 @@ use tracing_subscriber::{
     prelude::*,
 };
 
+use crate::replicate::Replicator;
+
+mod replicate;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut filter = Targets::new();
     filter = filter
         .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
-        .with_target("iroh", LevelFilter::INFO);
+        .with_target("iroh-gossip", LevelFilter::DEBUG);
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(filter)
@@ -28,14 +33,36 @@ async fn main() -> anyhow::Result<()> {
         .bind()
         .await?;
 
-    info!("public key {}",config.get_public());
-    // We initialize an in-memory backing store for iroh-blobs
-    let store = MemStore::new();
-    // Then we initialize a struct that can accept blobs requests over iroh connections
-    let blobs = BlobsProtocol::new(&store, None);
+    info!("public key {}", config.get_public());
+    // BLOBS!
+    let path = PathBuf::from("data/blobs");
+    let store = FsStore::load(path).await.unwrap();
+    let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
+
+    // GOSSIP!
+    let gossip = Gossip::builder().spawn(endpoint.clone());
+
     let router = Router::builder(endpoint)
-        .accept(iroh_blobs::ALPN, blobs)
+        .accept(iroh_blobs::ALPN, blobs.clone())
+        .accept(iroh_gossip::ALPN, gossip.clone())
         .spawn();
+
+    // Create the replica system
+    let topic = blake3::hash(b"copycopycopy");
+    let topic_id = TopicId::from_bytes(*topic.as_bytes());
+    let repl_res = Replicator::new(
+        gossip.clone(),
+        blobs.clone(),
+        topic_id,
+        config.get_peers(),
+        config.get_secret(),
+        vec!["col".to_string(), "notes".to_string()],
+    )
+    .await;
+    match repl_res {
+        Ok(repl) => repl.run().await.expect("borked"),
+        Err(e) => error!("repl fail {}", e),
+    }
 
     tokio::signal::ctrl_c().await?;
 
@@ -47,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     secret: SecretKey,
+    peers: Vec<PublicKey>,
 }
 
 impl Config {
@@ -56,6 +84,10 @@ impl Config {
 
     pub fn get_public(&self) -> PublicKey {
         self.secret.public()
+    }
+
+    pub fn get_peers(&self) -> Vec<PublicKey> {
+        self.peers.clone()
     }
 
     pub fn save(&self, path: &PathBuf) -> Result<()> {
@@ -75,7 +107,10 @@ impl Config {
                 error!("{:?}", &e);
                 warn!("Config file does not exist");
                 let secret = SecretKey::generate();
-                let slf = Self { secret };
+                let slf = Self {
+                    secret,
+                    peers: vec![],
+                };
                 slf.save(&path)?;
                 slf
                 // return Err(anyhow!("Bad Config File Parse {:#?}", e));
