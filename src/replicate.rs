@@ -73,7 +73,7 @@ pub async fn test_runner(
 
     let id = next_op_id();
     println!("update count {:?}", id);
-    let mut ticker = tokio::time::interval(Duration::from_secs(30));
+    let mut ticker = tokio::time::interval(Duration::from_secs(3600));
     loop {
         tokio::select! {
             _ = ticker.tick() => {
@@ -87,10 +87,12 @@ pub async fn test_runner(
                         let _ = ws.put(tag_name, tag.hash.to_hex()).await;
                     }
                 }
+                // fetch some blobs from friends
                 let items = client.iter().collect::<Vec<_>>().await.expect("collect borked");
                     for (target,name, content_hash) in items {
                         info!("{} , {:#?} , {:#?}",target.fmt_short(),name,content_hash);
-                        get_item(&blobs,&endpoint,target,name,content_hash).await?;
+                        let res = get_item(&blobs,&endpoint,target,name,content_hash).await;
+                        info!("{:#?}",res);
                 };
             }
 
