@@ -19,8 +19,10 @@ mod replicate;
 async fn main() -> anyhow::Result<()> {
     let mut filter = Targets::new();
     filter = filter
+        .with_default(LevelFilter::INFO)
         .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
-        .with_target("iroh-blobs", LevelFilter::DEBUG);
+        .with_target("endpoint", LevelFilter::INFO)
+        .with_target("gossip", LevelFilter::DEBUG);
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(filter)
@@ -47,9 +49,12 @@ async fn main() -> anyhow::Result<()> {
         .accept(iroh_gossip::ALPN, gossip.clone())
         .spawn();
 
+    // let  _val = blobs.store().tags().delete_prefix("notes").await?;
+
     // Create the replica system
     let topic = blake3::hash(b"copycopycopy");
     let topic_id = TopicId::from_bytes(*topic.as_bytes());
+    info!("start replicator");
     let repl_res = Replicator::new(
         gossip.clone(),
         blobs.clone(),
@@ -64,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(repl) => repl.run().await.expect("borked"),
         Err(e) => error!("repl fail {}", e),
     }
-
+    info!("wait for exit");
     tokio::signal::ctrl_c().await?;
 
     router.shutdown().await?;

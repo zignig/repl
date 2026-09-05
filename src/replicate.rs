@@ -1,7 +1,7 @@
 // Make a replicator using the iroh-smol-kv
 //
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::{str::FromStr, time::Duration};
 
 use bytes::Bytes;
@@ -80,14 +80,25 @@ pub async fn test_runner(
         sub,
         blobs.clone(),
         endpoint.clone(),
-        prefix.clone()
+        prefix.clone(),
     ));
     subscribers.insert(id, AbortOnDropHandle::new(task));
     println!("update count {:?}", id);
     let mut ticker = tokio::time::interval(Duration::from_secs(600));
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                let mut wrap_up: BTreeMap<Bytes,Vec<PublicKey>> = BTreeMap::new();
+                let items = client
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .await
+                    .expect("collect borked");
+                for (ep,_,val) in items {
+                    wrap_up.entry(val.clone()).or_default().push(ep.clone())
+                };
+                println!("{:#?}",&wrap_up);
                 for pre in prefix.clone().into_iter() {
                     // info!("scan prefix {}",&pre);
                     let mut counter  = 0;
@@ -126,7 +137,7 @@ async fn get_item(
     match blobs.store().remote().local(knf).await {
         Ok(info) => {
             if !info.is_complete() {
-                info!("fetch blob {:?} {:#?}",&name, &s);
+                info!("fetch blob {:?} {:#?}", &name, &s);
                 if target != endpoint.id() {
                     let conn = endpoint
                         .connect(target, iroh_blobs::ALPN)
@@ -156,7 +167,7 @@ async fn handle_subscription(
     sub: SubscribeResponse,
     blobs: BlobsProtocol,
     endpoint: Endpoint,
-    _prefix : Vec<String>
+    _prefix: Vec<String>,
 ) {
     let stream = sub.stream_raw();
     tokio::pin!(stream);
@@ -170,7 +181,7 @@ async fn handle_subscription(
                     format_bytes(&key),
                     format_bytes(&value.value)
                 );
-                
+
                 let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
             }
             Ok(SubscribeItem::Expired((scope, key, timestamp))) => {
@@ -182,7 +193,9 @@ async fn handle_subscription(
                     timestamp,
                 );
             }
-            Ok(SubscribeItem::CurrentDone) => {}
+            Ok(SubscribeItem::CurrentDone) => {
+                info!("sub up to date");
+            }
             Err(e) => {
                 println!("#{id}: Error in subscription: {e:?}");
                 break;
