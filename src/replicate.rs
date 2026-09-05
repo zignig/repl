@@ -1,7 +1,7 @@
 // Make a replicator using the iroh-smol-kv
 //
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::{str::FromStr, time::Duration};
 
 use bytes::Bytes;
@@ -86,19 +86,21 @@ pub async fn test_runner(
     println!("update count {:?}", id);
     let mut ticker = tokio::time::interval(Duration::from_secs(600));
 
+    // let mut clump: BTreeMap<Bytes, HashSet<PublicKey>> = BTreeMap::new();
+    // let items = client
+    //     .iter()
+    //     .collect::<Vec<_>>()
+    //     .await
+    //     .expect("collect borked");
+    // for (ep, _, val) in items {
+    //     // wrap_up.entry(val.clone()).or_default().push(ep.clone());
+    //     let z = clump.entry(val.clone()).or_default();
+    //     let _ = z.insert(ep);
+    // };
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let mut wrap_up: BTreeMap<Bytes,Vec<PublicKey>> = BTreeMap::new();
-                let items = client
-                    .iter()
-                    .collect::<Vec<_>>()
-                    .await
-                    .expect("collect borked");
-                for (ep,_,val) in items {
-                    wrap_up.entry(val.clone()).or_default().push(ep.clone())
-                };
-                println!("{:#?}",&wrap_up);
                 for pre in prefix.clone().into_iter() {
                     // info!("scan prefix {}",&pre);
                     let mut counter  = 0;
@@ -114,8 +116,6 @@ pub async fn test_runner(
                     info!("prefix {} - {} items",&pre,counter);
                 }
             }
-
-
         };
     }
 }
@@ -131,9 +131,6 @@ async fn get_item(
     let s = str::from_utf8(&hash).expect("bad hash");
     let hash = Hash::from_str(s).expect("bad conversion");
     let knf = HashAndFormat::hash_seq(hash);
-    // if let Ok(status)  = blobs.blobs().status(hash).await{
-    //     info!("status {:?} {:?}",status,hash);
-    // }
     match blobs.store().remote().local(knf).await {
         Ok(info) => {
             if !info.is_complete() {
@@ -167,22 +164,27 @@ async fn handle_subscription(
     sub: SubscribeResponse,
     blobs: BlobsProtocol,
     endpoint: Endpoint,
-    _prefix: Vec<String>,
+    prefix: Vec<String>,
 ) {
     let stream = sub.stream_raw();
     tokio::pin!(stream);
     while let Some(item) = stream.next().await {
         match item {
             Ok(SubscribeItem::Entry((scope, key, value))) => {
-                println!(
-                    "#{}: ({},{},{})",
-                    id,
-                    scope.fmt_short(),
-                    format_bytes(&key),
-                    format_bytes(&value.value)
-                );
-
-                let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
+                let tag_name = str::from_utf8(&key).unwrap().to_owned();
+                // only download known prefixs
+                if prefix.iter().any(|s| tag_name.starts_with(s)) {
+                    let mut val = format_bytes(&value.value);
+                    val.truncate(12);
+                    println!(
+                        "#{}: ({},{},{})",
+                        id,
+                        scope.fmt_short(),
+                        format_bytes(&key),
+                        val
+                    );
+                    let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
+                };
             }
             Ok(SubscribeItem::Expired((scope, key, timestamp))) => {
                 println!(

@@ -19,14 +19,20 @@ mod replicate;
 async fn main() -> anyhow::Result<()> {
     let mut filter = Targets::new();
     filter = filter
-        .with_default(LevelFilter::INFO)
+        // .with_default(LevelFilter::DEBUG)
         .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
-        .with_target("endpoint", LevelFilter::INFO)
-        .with_target("gossip", LevelFilter::DEBUG);
+        // .with_target("iroh", LevelFilter::INFO)
+        .with_target("iroh_gossip", LevelFilter::INFO);
+    // .with_target("iroh_smol_kv", LevelFilter::TRACE);
+
+    let fmt_layer = tracing_subscriber::fmt::layer().compact().without_time();
+
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        // .with(tracing_subscriber::fmt::layer())
         .with(filter)
+        .with(fmt_layer)
         .init();
+
     let pb = PathBuf::from("config.toml");
     let config = Config::load(pb)?;
 
@@ -65,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         config.get_prefix(),
     )
     .await;
+
     match repl_res {
         Ok(repl) => repl.run().await.expect("borked"),
         Err(e) => error!("repl fail {}", e),
