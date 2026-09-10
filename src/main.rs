@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     filter = filter
         // .with_default(LevelFilter::DEBUG)
         .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
-        // .with_target("iroh", LevelFilter::INFO)
+        .with_target("iroh_blobs", LevelFilter::INFO)
         .with_target("iroh_gossip", LevelFilter::INFO);
     // .with_target("iroh_smol_kv", LevelFilter::TRACE);
 

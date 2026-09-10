@@ -10,7 +10,7 @@ use iroh_blobs::{BlobsProtocol, Hash, HashAndFormat};
 use iroh_gossip::{net::Gossip, proto::TopicId};
 
 use iroh_smol_kv::util::format_bytes;
-use iroh_smol_kv::{Client, Config, SubscribeItem, SubscribeResponse};
+use iroh_smol_kv::{Client, Config, SignedValue, SubscribeItem, SubscribeResponse};
 use n0_future::{StreamExt, task::AbortOnDropHandle};
 use n0_snafu::{Result, ResultExt};
 use tokio::task;
@@ -75,13 +75,12 @@ pub async fn test_runner(
     };
     let sub = client.subscribe();
     let id = next_op_id();
-    let task = tokio::spawn(handle_subscription(
-        id,
-        sub,
-        blobs.clone(),
-        endpoint.clone(),
-        prefix.clone(),
-    ));
+    let (dl_out, mut dl_in) = tokio::sync::mpsc::channel::<Entry>(32);
+    // down load task
+    let _dl_task = tokio::spawn(handle_downloads(id, dl_in, blobs.clone(), endpoint.clone()));
+
+    let id = next_op_id();
+    let task = tokio::spawn(handle_subscription(id, sub, prefix.clone(), dl_out.clone()));
     subscribers.insert(id, AbortOnDropHandle::new(task));
     println!("update count {:?}", id);
     let mut ticker = tokio::time::interval(Duration::from_secs(600));
@@ -120,15 +119,26 @@ pub async fn test_runner(
     }
 }
 
-async fn get_item(
-    blobs: &BlobsProtocol,
-    endpoint: &Endpoint,
-    target: PublicKey,
-    name: Bytes,
-    hash: Bytes,
+// not public in smol kv, copy
+type Entry = (PublicKey, Bytes, SignedValue);
+
+async fn handle_downloads(
+    id: usize,
+    mut reciver: tokio::sync::mpsc::Receiver<Entry>,
+    blobs: BlobsProtocol,
+    endpoint: Endpoint,
 ) -> Result<()> {
+    while let Some(item) = reciver.recv().await {
+        // error!("{} : item => {:#?}", id, item);
+        let _ = get_item(&blobs, &endpoint, item).await;
+    }
+    Ok(())
+}
+
+async fn get_item(blobs: &BlobsProtocol, endpoint: &Endpoint, item: Entry) -> Result<()> {
+    let (target, name, hash) = item;
     // info!("get item len {:#?}", hash.len());
-    let s = str::from_utf8(&hash).expect("bad hash");
+    let s = str::from_utf8(&hash.value).expect("bad hash");
     let hash = Hash::from_str(s).expect("bad conversion");
     let knf = HashAndFormat::hash_seq(hash);
     match blobs.store().remote().local(knf).await {
@@ -162,20 +172,22 @@ async fn get_item(
 async fn handle_subscription(
     id: usize,
     sub: SubscribeResponse,
-    blobs: BlobsProtocol,
-    endpoint: Endpoint,
     prefix: Vec<String>,
+    outgoing: tokio::sync::mpsc::Sender<Entry>,
 ) {
     let stream = sub.stream_raw();
     tokio::pin!(stream);
     while let Some(item) = stream.next().await {
         match item {
-            Ok(SubscribeItem::Entry((scope, key, value))) => {
+            Ok(SubscribeItem::Entry(ent)) => {
+                let (scope, key, value) = ent.clone();
                 let tag_name = str::from_utf8(&key).unwrap().to_owned();
                 // only download known prefixs
                 if prefix.iter().any(|s| tag_name.starts_with(s)) {
                     let mut val = format_bytes(&value.value);
                     val.truncate(12);
+                    val.push_str("\"");
+
                     println!(
                         "#{}: ({},{},{})",
                         id,
@@ -183,7 +195,8 @@ async fn handle_subscription(
                         format_bytes(&key),
                         val
                     );
-                    let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
+                    let _ = outgoing.send(ent).await;
+                    // let _ = get_item(&blobs, &endpoint, scope, key, value.value).await;
                 };
             }
             Ok(SubscribeItem::Expired((scope, key, timestamp))) => {
